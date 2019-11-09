@@ -221,11 +221,11 @@ class base(nn.Module):
             loss = c[0]/lazy_step
             tloss += loss.item()
             loss.backward()
-            #print('[Training][Epoch: %d]Step : %d Mean Loss: %.2f Decoding Entropy: %.2f Reconstruct Entropy: %.2f OLoss: %.2f' % (epoch, self.step, c[0], c[1], c[2], c[3]))
+            print('[Training][Epoch: %d]Step : %d Mean Loss: %.2f Decoding Entropy: %.2f Reconstruct Entropy: %.2f OLoss: %.2f' % (epoch, self.step, c[0], c[1], c[2], c[3]))
             if (i+1)%lazy_step == 0 or i == (len(dataloader) -1):
                 #print('update')
                 self.optimize()
-                print('[Training][Epoch: %d]Step : %d Mean Loss: %.2f' % (epoch, self.step, tloss))
+                #print('[Training][Epoch: %d]Step : %d Mean Loss: %.2f' % (epoch, self.step, tloss))
                 tloss = 0
             del batch
     

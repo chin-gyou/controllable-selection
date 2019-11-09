@@ -59,34 +59,46 @@ class seqattn(base):
         enc_text = batch[1]
         _, context, ht, predpri = self.encode(enc_text)
         umask = (batch[1]==PAD).float()#seq_len*batch_size
-        selen = torch.sum(context*(predpri*(1-umask)).unsqueeze(-1),0)/torch.sum(predpri*(1-umask) + 1e-10, 0, True).t()
-        d_hidden = nonlinear(self.decoder.initS(selen))
-        c_hidden = nonlinear(self.decoder.initC(selen))
         o_loss = 0
-        r_loss = 0
+        t_loss = 0
         t_len=torch.sum((dec_text!=PAD).float())
         pad_mask = (dec_text!=PAD).float()
         e_len = torch.sum(1-umask)
+        bisample = torch.bernoulli(predpri)
+        selected = torch.sum(context*(bisample.unsqueeze(-1)), 0)/(1e-10+bisample.sum(0, True).t())
+        d_hidden = nonlinear(self.decoder.initS(selected))
+        c_hidden = nonlinear(self.decoder.initC(selected))
+        #likelihood for sampled select
         for i in range(dec_text.size(0)):
-            _, c_vec, _ = self.attnvec(context, d_hidden, predpri, umask)
-            #r_loss += self.pdist(dcontext[i], dvec).squeeze(-1)*pad_mask[i]
-            #print('dec:', dec_text[i])
-            #print(moc)
-            #print(batch['enc_txt'][0][moc])
+            _, c_vec, _ = self.attnvec(context, d_hidden, bisample, umask)
             output = self.em_out(self.outproj(torch.cat((d_hidden, c_vec), 1)))
-            #output = self.outproj(torch.cat((d_hidden, c_vec), 1))
             t_prob = F.softmax(output, -1)
-        
             tg_prob = torch.gather(t_prob, 1, dec_text[i].unsqueeze(-1)).squeeze()
-            #print(dec_text[i],tg_prob)
             del t_prob
             o_loss -= torch.log(1e-10 + tg_prob)*pad_mask[i]
             
             d_hidden, c_hidden = self.decoder(dec_text[i], d_hidden, c_hidden, c_vec, self.mode)
+        selected = torch.sum(context*(predpri.unsqueeze(-1)), 0)/(1e-10+predpri.sum(0, True).t())
+        d_hidden = nonlinear(self.decoder.initS(selected))
+        c_hidden = nonlinear(self.decoder.initC(selected))
+        #likelihood for soft baseline
+        for i in range(dec_text.size(0)):
+            _, c_vec, _ = self.attnvec(context, d_hidden, predpri, umask)
+            output = self.em_out(self.outproj(torch.cat((d_hidden, c_vec), 1)))
+            t_prob = F.softmax(output, -1)
+            tg_prob = torch.gather(t_prob, 1, dec_text[i].unsqueeze(-1)).squeeze()
+            del t_prob
+            t_loss -= torch.log(1e-10 + tg_prob)*pad_mask[i]
+            
+            d_hidden, c_hidden = self.decoder(dec_text[i], d_hidden, c_hidden, c_vec, self.mode)
+        s_r = -o_loss
+        b_r = -t_loss
+        s_prob = predpri*bisample + (1-predpri)*(1-bisample)
+        s_prob = torch.sum(torch.log(s_prob)*(1-umask), 0)
+        picked = torch.sum(bisample*(1-umask))/e_len
+        
+        return -(s_prob*(s_r.detach()-b_r.detach())).sum()/t_len + o_loss.sum()/t_len + 10*F.relu(picked - SELECT_RATIO), torch.sum(o_loss)/t_len, torch.sum(o_loss)/t_len, torch.sum(bisample*(1-umask))/e_len
         #sys.exit()
-        picked = torch.sum(predpri*(1-umask))/e_len
-        max_p = torch.max(predpri*(1-umask), 0)[0].mean()
-        return o_loss.sum()/t_len + 10*torch.abs(picked - SELECT_RATIO) + 10*(1-max_p), torch.sum(o_loss)/t_len, max_p, picked
     
     def cost(self, forwarded):
         return forwarded

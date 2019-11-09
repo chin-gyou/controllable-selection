@@ -71,7 +71,7 @@ def padd(l, max_len, max_limit):
 def merge_sample(batch):
     dicted_data = [[b[i] for b in batch] for i in range(3)]
     max_lens = [max([len(text) for text in v]) for v in dicted_data]
-    max_limit = [dec_limit, enc_limit]
+    max_limit = [dec_limit, enc_limit, enc_limit]
     #max_lens = max_limit
 
     #padd data up to the maximum length

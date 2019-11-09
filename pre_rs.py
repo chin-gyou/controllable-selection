@@ -59,14 +59,20 @@ class seqattn(base):
         enc_text = batch[1]
         _, context, ht, predpri = self.encode(enc_text)
         umask = (batch[1]==PAD).float()#seq_len*batch_size
-        selen = torch.sum(context*(predpri*(1-umask)).unsqueeze(-1),0)/torch.sum(predpri*(1-umask) + 1e-10, 0, True).t()
-        d_hidden = nonlinear(self.decoder.initS(selen))
-        c_hidden = nonlinear(self.decoder.initC(selen))
+        kmask = batch[2].float()#seq_len*batch_size
+        
+        post_loss = kmask*torch.log(predpri+1e-10) + (1-kmask)*torch.log(1-predpri+1e-10)
+        post_loss = -torch.sum(post_loss*(1-umask), 0)
+        bisample = torch.bernoulli(predpri)
+        selected = torch.sum(context*(bisample.unsqueeze(-1)), 0)/(1e-10+bisample.sum(0, True).t())
+        d_hidden = nonlinear(self.decoder.initS(selected))
+        c_hidden = nonlinear(self.decoder.initC(selected))
+        
         o_loss = 0
         r_loss = 0
         t_len=torch.sum((dec_text!=PAD).float())
-        pad_mask = (dec_text!=PAD).float()
         e_len = torch.sum(1-umask)
+        pad_mask = (dec_text!=PAD).float()
         for i in range(dec_text.size(0)):
             _, c_vec, _ = self.attnvec(context, d_hidden, predpri, umask)
             #r_loss += self.pdist(dcontext[i], dvec).squeeze(-1)*pad_mask[i]
@@ -84,9 +90,7 @@ class seqattn(base):
             
             d_hidden, c_hidden = self.decoder(dec_text[i], d_hidden, c_hidden, c_vec, self.mode)
         #sys.exit()
-        picked = torch.sum(predpri*(1-umask))/e_len
-        max_p = torch.max(predpri*(1-umask), 0)[0].mean()
-        return o_loss.sum()/t_len + 10*torch.abs(picked - SELECT_RATIO) + 10*(1-max_p), torch.sum(o_loss)/t_len, max_p, picked
+        return post_loss.sum()/t_len + o_loss.sum()/t_len, o_loss.sum()/t_len, post_loss.sum()/t_len,torch.sum(bisample*(1-umask))/e_len
     
     def cost(self, forwarded):
         return forwarded
