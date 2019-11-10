@@ -24,16 +24,20 @@ class seqattn(base):
         #self.outproj = nn.Linear(dc_size + d_size, em.size(1))
 
     #return the encoded vector of the context
-    def encode(self, enc_text):
+    def encode(self, enc_text, dec_text):
         mask = (enc_text!=PAD).float()
         slen = mask.sum(0)
         text_embed = self.embedding(enc_text)
-        seq_inputs = text_embed
-        enc_states, ht = self.encoder.run(seq_inputs, slen, self.mode)
+        enc_states, ht = self.encoder.run(text_embed, slen, self.mode)
+        dlen = (dec_text!=PAD).float().sum(0)
+        text_states, _ = self.encoder2.run(self.embedding(dec_text),dlen, self.mode)
+        t_state = text_states[-1].expand(enc_text.size(0), -1, -1)
+        post_in = torch.cat((enc_states, t_state), 2)
         pre_in = enc_states
+        predpost = F.sigmoid(self.predpost2(F.relu((self.predpost1(post_in))))).squeeze(-1)
         predpri = F.sigmoid(self.predpri2(F.relu((self.predpri1(pre_in))))).squeeze(-1)
         
-        return seq_inputs, enc_states, ht, predpri#seq_len*[batch_size*h_size]
+        return text_embed, enc_states, ht, predpri, predpost#seq_len*[batch_size*h_size]
         
     def attnvec(self, encs, dec, kmask, umask):
         attnencs = encs
@@ -56,40 +60,48 @@ class seqattn(base):
     def forward(self, batch):
         dec_text = batch[0]
         enc_text = batch[1]
-        _, context, ht, predpri = self.encode(enc_text)
+        _, context, ht, predpri, predpost = self.encode(enc_text, dec_text)
         umask = (batch[1]==PAD).float()#seq_len*batch_size
-        kmask = batch[2].float()#seq_len*batch_size
-        
-        post_loss = kmask*torch.log(predpri+1e-10) + (1-kmask)*torch.log(1-predpri+1e-10)
-        post_loss = -torch.sum(post_loss*(1-umask), 0)
-        bisample = torch.bernoulli(predpri)
+        t_kl = torch.sum(self.kldiv(predpost, predpri)*(1-umask), 0)
+        o_loss = 0
+        t_loss = 0
+        t_len=torch.sum((dec_text!=PAD).float())
+        pad_mask = (dec_text!=PAD).float()
+        e_len = torch.sum(1-umask)
+        bisample = torch.bernoulli(predpost)
         selected = torch.sum(context*(bisample.unsqueeze(-1)), 0)/(1e-10+bisample.sum(0, True).t())
         d_hidden = nonlinear(self.decoder.initS(selected))
         c_hidden = nonlinear(self.decoder.initC(selected))
-        
-        o_loss = 0
-        r_loss = 0
-        t_len=torch.sum((dec_text!=PAD).float())
-        e_len = torch.sum(1-umask)
-        pad_mask = (dec_text!=PAD).float()
+        #likelihood for sampled select
         for i in range(dec_text.size(0)):
             _, c_vec, _ = self.attnvec(context, d_hidden, bisample, umask)
-            #r_loss += self.pdist(dcontext[i], dvec).squeeze(-1)*pad_mask[i]
-            #print('dec:', dec_text[i])
-            #print(moc)
-            #print(batch['enc_txt'][0][moc])
             output = self.em_out(self.outproj(torch.cat((d_hidden, c_vec), 1)))
-            #output = self.outproj(torch.cat((d_hidden, c_vec), 1))
             t_prob = F.softmax(output, -1)
-        
             tg_prob = torch.gather(t_prob, 1, dec_text[i].unsqueeze(-1)).squeeze()
-            #print(dec_text[i],tg_prob)
             del t_prob
             o_loss -= torch.log(1e-10 + tg_prob)*pad_mask[i]
             
             d_hidden, c_hidden = self.decoder(dec_text[i], d_hidden, c_hidden, c_vec, self.mode)
+        selected = torch.sum(context*(predpost.unsqueeze(-1)), 0)/(1e-10+predpost.sum(0, True).t())
+        d_hidden = nonlinear(self.decoder.initS(selected))
+        c_hidden = nonlinear(self.decoder.initC(selected))
+        #likelihood for soft baseline
+        for i in range(dec_text.size(0)):
+            _, c_vec, _ = self.attnvec(context, d_hidden, predpost, umask)
+            output = self.em_out(self.outproj(torch.cat((d_hidden, c_vec), 1)))
+            t_prob = F.softmax(output, -1)
+            tg_prob = torch.gather(t_prob, 1, dec_text[i].unsqueeze(-1)).squeeze()
+            del t_prob
+            t_loss -= torch.log(1e-10 + tg_prob)*pad_mask[i]
+            
+            d_hidden, c_hidden = self.decoder(dec_text[i], d_hidden, c_hidden, c_vec, self.mode)
+        s_r = -o_loss
+        b_r = -t_loss
+        s_prob = predpri*bisample + (1-predpri)*(1-bisample)
+        s_prob = torch.sum(torch.log(s_prob)*(1-umask), 0)
+        
+        return -(s_prob*(s_r.detach()-b_r.detach())).sum()/t_len + o_loss.sum()/t_len + torch.max(t_kl/t_len, torch.tensor([KL_THRESH*e_len/t_len]).to(DEVICE)), torch.sum(o_loss)/t_len, t_kl/t_len, torch.sum(bisample*(1-umask))/e_len
         #sys.exit()
-        return post_loss.sum()/t_len + o_loss.sum()/t_len, o_loss.sum()/t_len, post_loss.sum()/t_len,torch.sum(bisample*(1-umask))/e_len
     
     def cost(self, forwarded):
         return forwarded

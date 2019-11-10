@@ -25,6 +25,7 @@ d_size=512#hidden size of decoder
 w_size=300#project size of attention
 b_size=128#batch size
 SELECT_RATIO = 0.35#the selecting ratio
+KL_THRESH = 0.2#epsilon to regularize the KL divergence
 lr=0.001#learning rate
 lazy_step = 1#step for gradient accumulation
 data_dir = './giga/dataset'#dataset directory

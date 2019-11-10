@@ -10,9 +10,12 @@ class seqattn(base):
         self.attnD = nn.Linear(d_size, dc_size)
 
         self.encoder = EncoderRNN(em.size(1), h_size, 0.3, bi)
+        self.encoder2 = EncoderRNN(em.size(1), h_size, 0.3, bi)
         self.decoder = DecoderRNN(self.embedding, d_size, context_size=dc_size, drop_out = 0.3)
         #optimizer
         self.lr = lr
+        self.predpost1 = nn.Linear(2*dc_size, w_size)
+        self.predpost2 = nn.Linear(w_size, 1)
         self.predpri1 = nn.Linear(dc_size, w_size)
         self.predpri2 = nn.Linear(w_size, 1)
         #self.optim = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=1.2e-6)
@@ -24,16 +27,20 @@ class seqattn(base):
         #self.outproj = nn.Linear(dc_size + d_size, em.size(1))
 
     #return the encoded vector of the context
-    def encode(self, enc_text):
+    def encode(self, enc_text, dec_text):
         mask = (enc_text!=PAD).float()
         slen = mask.sum(0)
         text_embed = self.embedding(enc_text)
-        seq_inputs = text_embed
-        enc_states, ht = self.encoder.run(seq_inputs, slen, self.mode)
+        enc_states, ht = self.encoder.run(text_embed, slen, self.mode)
+        dlen = (dec_text!=PAD).float().sum(0)
+        text_states, _ = self.encoder2.run(self.embedding(dec_text),dlen, self.mode)
+        t_state = text_states[-1].expand(enc_text.size(0), -1, -1)
+        post_in = torch.cat((enc_states, t_state), 2)
         pre_in = enc_states
+        predpost = F.sigmoid(self.predpost2(F.relu((self.predpost1(post_in))))).squeeze(-1)
         predpri = F.sigmoid(self.predpri2(F.relu((self.predpri1(pre_in))))).squeeze(-1)
         
-        return seq_inputs, enc_states, ht, predpri#seq_len*[batch_size*h_size]
+        return text_embed, enc_states, ht, predpri, predpost#seq_len*[batch_size*h_size]
         
     def attnvec(self, encs, dec, kmask, umask):
         attnencs = encs
@@ -56,13 +63,14 @@ class seqattn(base):
     def forward(self, batch):
         dec_text = batch[0]
         enc_text = batch[1]
-        _, context, ht, predpri = self.encode(enc_text)
+        _, context, ht, predpri, predpost = self.encode(enc_text, dec_text)
         umask = (batch[1]==PAD).float()#seq_len*batch_size
         kmask = batch[2].float()#seq_len*batch_size
+        t_kl = torch.sum(self.kldiv(predpost.detach(), predpri)*(1-umask), 0)
         
-        post_loss = kmask*torch.log(predpri+1e-10) + (1-kmask)*torch.log(1-predpri+1e-10)
+        post_loss = kmask*torch.log(predpost+1e-10) + (1-kmask)*torch.log(1-predpost+1e-10)
         post_loss = -torch.sum(post_loss*(1-umask), 0)
-        bisample = torch.bernoulli(predpri)
+        bisample = torch.bernoulli(predpost)
         selected = torch.sum(context*(bisample.unsqueeze(-1)), 0)/(1e-10+bisample.sum(0, True).t())
         d_hidden = nonlinear(self.decoder.initS(selected))
         c_hidden = nonlinear(self.decoder.initC(selected))

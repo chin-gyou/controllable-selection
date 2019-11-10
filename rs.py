@@ -30,11 +30,10 @@ class seqattn(base):
         text_embed = self.embedding(enc_text)
         seq_inputs = text_embed
         enc_states, ht = self.encoder.run(seq_inputs, slen, self.mode)
-        predpri = []
-        for stat in enc_states:
-            predpri.append(F.sigmoid(self.predpri2(F.relu((self.predpri1(stat))))).squeeze())# +1e-10
+        pre_in = enc_states
+        predpri = F.sigmoid(self.predpri2(F.relu((self.predpri1(pre_in))))).squeeze(-1)
         
-        return seq_inputs, enc_states, ht, torch.stack(predpri)#seq_len*[batch_size*h_size]
+        return seq_inputs, enc_states, ht, predpri#seq_len*[batch_size*h_size]
         
     def attnvec(self, encs, dec, kmask, umask):
         attnencs = encs
