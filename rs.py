@@ -93,7 +93,7 @@ class seqattn(base):
         s_r = -o_loss
         b_r = -t_loss
         s_prob = predpri*bisample + (1-predpri)*(1-bisample)
-        s_prob = torch.sum(torch.log(s_prob)*(1-umask), 0)
+        s_prob = torch.sum(torch.log(s_prob+1e-10)*(1-umask), 0)
         picked = torch.sum(bisample*(1-umask))/e_len
         
         return -(s_prob*(s_r.detach()-b_r.detach())).sum()/t_len + o_loss.sum()/t_len + 10*F.relu(picked - SELECT_RATIO), torch.sum(o_loss)/t_len, torch.sum(o_loss)/t_len, torch.sum(bisample*(1-umask))/e_len

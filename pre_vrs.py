@@ -71,7 +71,7 @@ class seqattn(base):
         _, context, ht, predpri, predpost = self.encode(enc_text, dec_text)
         umask = (batch[1]==PAD).float()#seq_len*batch_size
         kmask = batch[2].float()#seq_len*batch_size
-        t_kl = torch.sum(self.kldiv(predpost.detach(), predpri)*(1-umask), 0)
+        t_kl = torch.sum(self.kldiv(predpost.detach(), predpri)*(1-umask))
         
         post_loss = kmask*torch.log(predpost+1e-10) + (1-kmask)*torch.log(1-predpost+1e-10)
         post_loss = -torch.sum(post_loss*(1-umask), 0)
@@ -102,7 +102,7 @@ class seqattn(base):
             
             d_hidden, c_hidden = self.decoder(dec_text[i], d_hidden, c_hidden, c_vec, self.mode)
         #sys.exit()
-        return post_loss.sum()/t_len + o_loss.sum()/t_len, o_loss.sum()/t_len, post_loss.sum()/t_len,torch.sum(bisample*(1-umask))/e_len
+        return post_loss.sum()/t_len + o_loss.sum()/t_len + t_kl/t_len, o_loss.sum()/t_len, t_kl/t_len,torch.sum(bisample*(1-umask))/e_len 
     
     def cost(self, forwarded):
         return forwarded

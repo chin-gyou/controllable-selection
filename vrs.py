@@ -10,9 +10,12 @@ class seqattn(base):
         self.attnD = nn.Linear(d_size, dc_size)
 
         self.encoder = EncoderRNN(em.size(1), h_size, 0.3, bi)
+        self.encoder2 = EncoderRNN(em.size(1), h_size, 0.3, bi)
         self.decoder = DecoderRNN(self.embedding, d_size, context_size=dc_size, drop_out = 0.3)
         #optimizer
         self.lr = lr
+        self.predpost1 = nn.Linear(2*dc_size, w_size)
+        self.predpost2 = nn.Linear(w_size, 1)
         self.predpri1 = nn.Linear(dc_size, w_size)
         self.predpri2 = nn.Linear(w_size, 1)
         #self.optim = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=1.2e-6)
@@ -67,7 +70,7 @@ class seqattn(base):
         enc_text = batch[1]
         _, context, ht, predpri, predpost = self.encode(enc_text, dec_text)
         umask = (batch[1]==PAD).float()#seq_len*batch_size
-        t_kl = torch.sum(self.kldiv(predpost, predpri)*(1-umask), 0)
+        t_kl = torch.sum(self.kldiv(predpost, predpri)*(1-umask))
         o_loss = 0
         t_loss = 0
         t_len=torch.sum((dec_text!=PAD).float())
@@ -102,8 +105,8 @@ class seqattn(base):
             d_hidden, c_hidden = self.decoder(dec_text[i], d_hidden, c_hidden, c_vec, self.mode)
         s_r = -o_loss
         b_r = -t_loss
-        s_prob = predpri*bisample + (1-predpri)*(1-bisample)
-        s_prob = torch.sum(torch.log(s_prob)*(1-umask), 0)
+        s_prob = predpost*bisample + (1-predpost)*(1-bisample)
+        s_prob = torch.sum(torch.log(s_prob + 1e-10)*(1-umask), 0)
         
         return -(s_prob*(s_r.detach()-b_r.detach())).sum()/t_len + o_loss.sum()/t_len + torch.max(t_kl/t_len, torch.tensor([KL_THRESH*e_len/t_len]).to(DEVICE)), torch.sum(o_loss)/t_len, t_kl/t_len, torch.sum(bisample*(1-umask))/e_len
         #sys.exit()
