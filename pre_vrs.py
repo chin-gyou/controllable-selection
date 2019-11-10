@@ -55,6 +55,11 @@ class seqattn(base):
         _, m_foc = torch.max(weights, 0)
 
         return m_foc, c_vec, weights
+    
+    #kl(p1||p2)
+    def kldiv(self, p1, p2):
+        kl = p1*torch.log((p1+1e-10)/(p2+1e-10)) + (1-p1)*torch.log((1-p1+1e-10)/(1-p2+1e-10))
+        return kl
     """
     return the cost of one batch
     dec_text: dec_len*batch_size
